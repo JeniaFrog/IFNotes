@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="IFnoted">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>IFnoted</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #f2f2f7; color: #111; }
+  header { position: sticky; top: 0; background: #fff; padding: calc(env(safe-area-inset-top) + 10px) 16px 10px;
+           display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #ddd; z-index: 5; }
+  h1 { font-size: 20px; margin: 0; }
+  select, button, input { font: inherit; }
+  #filter { padding: 6px; border-radius: 8px; border: 1px solid #ccc; background: #fff; }
+  #list { padding-bottom: 100px; }
+  .row { padding: 12px 16px; border-bottom: 1px solid #ddd; background: #fff;
+         -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .row.soon { background: #ffe0b2; }
+  .row small { display: block; color: #777; margin-top: 3px; }
+  .empty { text-align: center; color: #888; margin-top: 80px; white-space: pre-line; }
+  nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #ddd;
+        padding: 8px 16px calc(env(safe-area-inset-bottom) + 8px); display: flex; justify-content: center; }
+  #addBtn { background: #007aff; color: #fff; border: 0; border-radius: 24px; padding: 10px 28px; font-size: 17px; }
+  #modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 10; align-items: flex-end; }
+  #modal.open { display: flex; }
+  form { background: #fff; width: 100%; padding: 16px 16px calc(env(safe-area-inset-bottom) + 16px);
+         border-radius: 16px 16px 0 0; display: grid; gap: 10px; }
+  form h2 { margin: 0; font-size: 18px; }
+  label { font-size: 13px; color: #555; display: grid; gap: 4px; }
+  input, select.f { padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; width: 100%; }
+  .btns { display: flex; gap: 10px; }
+  .btns button { flex: 1; padding: 11px; border-radius: 10px; border: 0; font-size: 16px; }
+  #cancel { background: #e5e5ea; } #save { background: #007aff; color: #fff; }
+  #orig { font-size: 13px; color: #777; }
+</style>
+</head>
+<body>
+<header>
+  <h1>IFnoted</h1>
+  <select id="filter">
+    <option value="">All</option>
+    <option>New</option><option>Started</option><option>Completed</option><option>Deleted</option>
+  </select>
+</header>
+
+<div id="list"></div>
+
+<nav><button id="addBtn">＋ Add Mission</button></nav>
+
+<div id="modal">
+  <form id="form">
+    <h2 id="title">New Mission</h2>
+    <label>Source (max 20)
+      <input id="source" maxlength="20" required>
+    </label>
+    <label>Description (max 50)
+      <input id="desc" maxlength="50" required>
+    </label>
+    <label>Date to complete
+      <input id="date" type="date" required>
+    </label>
+    <label>Status
+      <select id="status" class="f">
+        <option>New</option><option>Started</option><option>Completed</option><option>Deleted</option>
+      </select>
+    </label>
+    <div id="orig"></div>
+    <div class="btns">
+      <button type="button" id="cancel">Cancel</button>
+      <button type="submit" id="save">Save</button>
+    </div>
+  </form>
+</div>
+
+<script>
+const KEY = "ifnoted_missions";
+let missions = JSON.parse(localStorage.getItem(KEY) || "[]");
+let editingId = null;
+const $ = id => document.getElementById(id);
+
+const save = () => localStorage.setItem(KEY, JSON.stringify(missions));
+const fmt = iso => { const [y, m, d] = iso.split("-"); return `${d}.${m}.${y.slice(2)}`; };
+const todayISO = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+const daysLeft = iso => Math.round((new Date(iso) - new Date(todayISO())) / 86400000);
+const isSoon = m => (m.status === "New" || m.status === "Started") && daysLeft(m.date) < 7;
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function render() {
+  const f = $("filter").value;
+  const items = missions
+    .filter(m => !f || m.status === f)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  $("list").innerHTML = items.length ? "" :
+    `<div class="empty">${missions.length ? "No missions match this filter." : "No missions yet.\nTap ＋ to add one."}</div>`;
+  items.forEach(m => {
+    const el = document.createElement("div");
+    el.className = "row" + (isSoon(m) ? " soon" : "");
+    el.innerHTML = `${esc(m.source)} ; ${esc(m.desc)} ; ${fmt(m.date)} ; ${m.status}` +
+      (m.date !== m.originalDate ? `<small>Originally: ${fmt(m.originalDate)}</small>` : "");
+    attachLongPress(el, () => openForm(m));
+    $("list").appendChild(el);
+  });
+  const n = missions.filter(isSoon).length;
+  if (navigator.setAppBadge) { n ? navigator.setAppBadge(n).catch(() => {}) : navigator.clearAppBadge().catch(() => {}); }
+}
+
+function attachLongPress(el, cb) {
+  let t;
+  const clear = () => clearTimeout(t);
+  el.addEventListener("pointerdown", () => { t = setTimeout(cb, 500); });
+  ["pointerup", "pointerleave", "pointermove", "pointercancel"].forEach(e => el.addEventListener(e, clear));
+  el.addEventListener("contextmenu", e => e.preventDefault());
+}
+
+function openForm(m) {
+  editingId = m ? m.id : null;
+  $("title").textContent = m ? "Edit Mission" : "New Mission";
+  $("source").value = m ? m.source : "";
+  $("desc").value = m ? m.desc : "";
+  $("date").value = m ? m.date : todayISO();
+  $("status").value = m ? m.status : "New";
+  updateOrig();
+  $("modal").classList.add("open");
+}
+function updateOrig() {
+  const m = missions.find(x => x.id === editingId);
+  $("orig").textContent = m && $("date").value !== m.originalDate ? `Original date: ${fmt(m.originalDate)}` : "";
+}
+
+$("addBtn").onclick = () => {
+  openForm(null);
+  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); // enables icon badge
+};
+$("cancel").onclick = () => $("modal").classList.remove("open");
+$("date").onchange = updateOrig;
+$("filter").onchange = render;
+
+$("form").onsubmit = e => {
+  e.preventDefault();
+  const data = { source: $("source").value.trim(), desc: $("desc").value.trim(), date: $("date").value, status: $("status").value };
+  if (editingId) {
+    const m = missions.find(x => x.id === editingId);
+    Object.assign(m, data); // originalDate is never touched
+  } else {
+    missions.push({ id: Date.now().toString(), ...data, originalDate: data.date });
+  }
+  save(); render();
+  $("modal").classList.remove("open");
+};
+
+render();
+</script>
+</body>
+</html>
