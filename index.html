@@ -6,21 +6,40 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="IFnoted">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#1c1c1e">
+<meta name="theme-color" content="#1c1c1e">
 <title>IFnoted</title>
 <style>
-    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #1c1c1e; color: #eee; }
   header { position: sticky; top: 0; background: #2a2a2d; padding: calc(env(safe-area-inset-top) + 10px) 16px 10px;
-           display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #3a3a3d; z-index: 5; }
-  h1 { font-size: 20px; margin: 0; color: #a3e635; }
+           display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #3a3a3d; z-index: 5; }
+  h1 { font-size: 20px; margin: 0; color: #a3e635; flex: 1; }
   select, button, input { font: inherit; }
-  #filter { padding: 6px; border-radius: 8px; border: 1px solid #444; background: #3a3a3d; color: #eee; }
-  #list { padding-bottom: 100px; }
-  .row { padding: 12px 16px; border-bottom: 1px solid #333; background: #242426; border-left: 4px solid transparent;
+  #filter, #viewBtn { padding: 6px 10px; border-radius: 8px; border: 1px solid #444; background: #3a3a3d; color: #eee; font-size: 14px; }
+  #content { padding-bottom: 100px; }
+
+  /* mission rows: 3 lines */
+  .row { padding: 10px 16px; border-left: 4px solid transparent; line-height: 1.35;
          -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  .row.soon { background: #3d2f1f; border-left-color: #f59e0b; }
-  .row small { display: block; color: #999; margin-top: 3px; }
+  .row .src { font-weight: 600; }
+  .row .dsc { color: #ddd; }
+  .row .dt { color: #aaa; font-size: 14px; }
+  .row.soon { border-left-color: #f59e0b; }
+  .row.soon .dt { color: #fbbf24; font-weight: 600; }
+  .row.done { opacity: .5; }
+  .row.done .dsc { text-decoration: line-through; }
+
+  /* blocks */
+  #blocks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; }
+  .block { border-radius: 14px; overflow: hidden; }
+  .block.open { grid-column: 1 / -1; }
+  .bhead { padding: 16px 14px; min-height: 84px; display: flex; flex-direction: column; justify-content: space-between; }
+  .bname { font-weight: 700; font-size: 17px; word-break: break-word; }
+  .bmeta { font-size: 13px; opacity: .85; margin-top: 6px; }
+  .bwarn { color: #fbbf24; font-weight: 600; }
+  .bbody { display: none; }
+  .block.open .bbody { display: block; }
+
   .empty { text-align: center; color: #888; margin-top: 80px; white-space: pre-line; }
   nav { position: fixed; bottom: 0; left: 0; right: 0; background: #2a2a2d; border-top: 1px solid #3a3a3d;
         padding: 8px 16px calc(env(safe-area-inset-bottom) + 8px); display: flex; justify-content: center; }
@@ -37,19 +56,19 @@
   .btns button { flex: 1; padding: 11px; border-radius: 10px; border: 0; font-size: 16px; }
   #cancel { background: #3a3a3d; color: #eee; } #save { background: #a3e635; color: #1c1c1e; font-weight: 600; }
   #orig { font-size: 13px; color: #999; }
-
 </style>
 </head>
 <body>
 <header>
   <h1>IFnoted</h1>
+  <button id="viewBtn"></button>
   <select id="filter">
     <option value="">All</option>
     <option>New</option><option>Started</option><option>Completed</option><option>Deleted</option>
   </select>
 </header>
 
-<div id="list"></div>
+<div id="content"></div>
 
 <nav><button id="addBtn">＋ Add Mission</button></nav>
 
@@ -57,7 +76,8 @@
   <form id="form">
     <h2 id="title">New Mission</h2>
     <label>Source (max 20)
-      <input id="source" maxlength="20" required>
+      <input id="source" maxlength="20" list="sources" autocomplete="off" required>
+      <datalist id="sources"></datalist>
     </label>
     <label>Description (max 50)
       <input id="desc" maxlength="50" required>
@@ -79,9 +99,11 @@
 </div>
 
 <script>
-const KEY = "ifnoted_missions";
+const KEY = "ifnoted_missions", VIEW_KEY = "ifnoted_view";
 let missions = JSON.parse(localStorage.getItem(KEY) || "[]");
+let view = localStorage.getItem(VIEW_KEY) || "list";
 let editingId = null;
+const openBlocks = new Set();
 const $ = id => document.getElementById(id);
 
 const save = () => localStorage.setItem(KEY, JSON.stringify(missions));
@@ -90,22 +112,65 @@ const todayISO = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60
 const daysLeft = iso => Math.round((new Date(iso) - new Date(todayISO())) / 86400000);
 const isSoon = m => (m.status === "New" || m.status === "Started") && daysLeft(m.date) < 7;
 const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const keyOf = s => s.trim().toLowerCase();
+
+const GREYS = ["#242426", "#2d2d30", "#363639"];
+function hueOf(str) {
+  let h = 0;
+  for (const c of str) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return h;
+}
+
+function missionEl(m, i, hue) {
+  const el = document.createElement("div");
+  el.className = "row" + (isSoon(m) ? " soon" : "") + (m.status === "Completed" || m.status === "Deleted" ? " done" : "");
+  el.style.background = hue === null ? GREYS[i % 3] : `hsl(${hue} 30% ${18 + (i % 3) * 5}%)`;
+  const was = m.date !== m.originalDate ? ` (was ${fmt(m.originalDate)})` : "";
+  el.innerHTML = `<div class="src">${esc(m.source)}</div><div class="dsc">${esc(m.desc)}</div><div class="dt">${fmt(m.date)}${was}</div>`;
+  attachLongPress(el, () => openForm(m));
+  return el;
+}
 
 function render() {
   const f = $("filter").value;
-  const items = missions
-    .filter(m => !f || m.status === f)
-    .sort((a, b) => a.date.localeCompare(b.date));
-  $("list").innerHTML = items.length ? "" :
-    `<div class="empty">${missions.length ? "No missions match this filter." : "No missions yet.\nTap ＋ to add one."}</div>`;
-  items.forEach(m => {
-    const el = document.createElement("div");
-    el.className = "row" + (isSoon(m) ? " soon" : "");
-    el.innerHTML = `${esc(m.source)} ; ${esc(m.desc)} ; ${fmt(m.date)} ; ${m.status}` +
-      (m.date !== m.originalDate ? `<small>Originally: ${fmt(m.originalDate)}</small>` : "");
-    attachLongPress(el, () => openForm(m));
-    $("list").appendChild(el);
-  });
+  const items = missions.filter(m => !f || m.status === f).sort((a, b) => a.date.localeCompare(b.date));
+  $("viewBtn").textContent = view === "list" ? "▦ Blocks" : "☰ List";
+  const box = $("content");
+  box.innerHTML = "";
+
+  if (!items.length) {
+    box.innerHTML = `<div class="empty">${missions.length ? "No missions match this filter." : "No missions yet.\nTap ＋ to add one."}</div>`;
+  } else if (view === "list") {
+    items.forEach((m, i) => box.appendChild(missionEl(m, i, null)));
+  } else {
+    const groups = new Map();
+    items.forEach(m => {
+      const k = keyOf(m.source);
+      if (!groups.has(k)) groups.set(k, { name: m.source, list: [] });
+      groups.get(k).list.push(m);
+    });
+    const grid = document.createElement("div");
+    grid.id = "blocks";
+    [...groups.entries()].forEach(([k, g]) => {   // already ordered by earliest due date
+      const hue = hueOf(k);
+      const soon = g.list.filter(isSoon).length;
+      const b = document.createElement("div");
+      b.className = "block" + (openBlocks.has(k) ? " open" : "");
+      b.style.background = `hsl(${hue} 45% 30%)`;
+      b.innerHTML = `<div class="bhead"><div class="bname">${esc(g.name)}</div>
+        <div class="bmeta">${g.list.length} mission${g.list.length > 1 ? "s" : ""}${soon ? ` · <span class="bwarn">⚠ ${soon} soon</span>` : ""}</div></div>
+        <div class="bbody"></div>`;
+      const body = b.querySelector(".bbody");
+      g.list.forEach((m, i) => body.appendChild(missionEl(m, i, hue)));
+      b.querySelector(".bhead").onclick = () => {
+        openBlocks.has(k) ? openBlocks.delete(k) : openBlocks.add(k);
+        b.classList.toggle("open");
+      };
+      grid.appendChild(b);
+    });
+    box.appendChild(grid);
+  }
+
   const n = missions.filter(isSoon).length;
   if (navigator.setAppBadge) { n ? navigator.setAppBadge(n).catch(() => {}) : navigator.clearAppBadge().catch(() => {}); }
 }
@@ -118,8 +183,16 @@ function attachLongPress(el, cb) {
   el.addEventListener("contextmenu", e => e.preventDefault());
 }
 
+function fillSources() {
+  const seen = new Map();
+  missions.forEach(m => { const k = keyOf(m.source); if (!seen.has(k)) seen.set(k, m.source); });
+  $("sources").innerHTML = [...seen.values()].sort((a, b) => a.localeCompare(b))
+    .map(s => `<option value="${esc(s)}"></option>`).join("");
+}
+
 function openForm(m) {
   editingId = m ? m.id : null;
+  fillSources();
   $("title").textContent = m ? "Edit Mission" : "New Mission";
   $("source").value = m ? m.source : "";
   $("desc").value = m ? m.desc : "";
@@ -135,18 +208,22 @@ function updateOrig() {
 
 $("addBtn").onclick = () => {
   openForm(null);
-  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); // enables icon badge
+  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
 };
 $("cancel").onclick = () => $("modal").classList.remove("open");
 $("date").onchange = updateOrig;
 $("filter").onchange = render;
+$("viewBtn").onclick = () => {
+  view = view === "list" ? "blocks" : "list";
+  localStorage.setItem(VIEW_KEY, view);
+  render();
+};
 
 $("form").onsubmit = e => {
   e.preventDefault();
   const data = { source: $("source").value.trim(), desc: $("desc").value.trim(), date: $("date").value, status: $("status").value };
   if (editingId) {
-    const m = missions.find(x => x.id === editingId);
-    Object.assign(m, data); // originalDate is never touched
+    Object.assign(missions.find(x => x.id === editingId), data); // originalDate never touched
   } else {
     missions.push({ id: Date.now().toString(), ...data, originalDate: data.date });
   }
